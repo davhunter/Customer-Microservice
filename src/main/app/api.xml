@@ -32,7 +32,7 @@ http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee
         <apikit:console config-ref="api-config" doc:name="APIkit Console"/>
     </flow>
     <flow name="get:/customers:api-config">
-        <logger message="${logging.flowStartMessage}." level="INFO" doc:name="Log Start"/>
+        <logger message="${logging.flowStartMessage}, yo" level="INFO" doc:name="Log Start"/>
         <set-variable variableName="region" value="#[message.inboundProperties.'http.query.params'.region or &quot;%&quot;]" doc:name="Set Region"/>
         <db:select config-ref="CustomerDB_Configuration" doc:name="Get Customers from DB">
             <db:parameterized-query><![CDATA[select id, first_name, last_name, region, phone from customer
