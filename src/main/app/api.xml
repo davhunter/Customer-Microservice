@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:context="http://www.springframework.org/schema/context" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd">
+    <http:listener-config name="api-httpListenerConfig" host="0.0.0.0" port="${http.port}" doc:name="HTTP Listener Configuration"/>
+    
+    <apikit:config name="api-config" raml="api.raml" consoleEnabled="false" doc:name="Router"/>
+    
+    <db:mysql-config name="CustomerDB_Configuration" url="${customerdatabase.url}" doc:name="MySQL Configuration"/>
+    
+    <context:property-placeholder location="customer_api-${mule.env}.properties"/>
+    
+    <configuration doc:name="Configuration">
+    	<expression-language>
+    		<import class="com.deloitte.mulesoft.helperclasses.CustomExceptionHelper"></import>
+    	</expression-language>
+    </configuration>
+    
+    <flow name="api-main">
+        <http:listener config-ref="api-httpListenerConfig" path="/customer-api/*" doc:name="HTTP"/>
+        <apikit:router config-ref="api-config" doc:name="APIkit Router"/>
+        <exception-strategy ref="api-apiKitGlobalExceptionMapping" doc:name="Reference Exception Strategy"/>
+    </flow>
+    <flow name="api-console">
+        <http:listener config-ref="api-httpListenerConfig" path="/console/*" doc:name="HTTP"/>
+        <apikit:console config-ref="api-config" doc:name="APIkit Console"/>
+    </flow>
+    <flow name="get:/customers:api-config">
+        <logger message="${logging.flowStartMessage}." level="INFO" doc:name="Log Start"/>
+        <set-variable variableName="region" value="#[message.inboundProperties.'http.query.params'.region or &quot;%&quot;]" doc:name="Set Region"/>
+        <db:select config-ref="CustomerDB_Configuration" doc:name="Get Customers from DB">
+            <db:parameterized-query><![CDATA[select id, first_name, last_name, region, phone from customer
+where region like #[flowVars.region]]]></db:parameterized-query>
+        </db:select>
+        <dw:transform-message doc:name="Pull Data into CDM">
+            <dw:set-variable variableName="cdm"><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	customers: payload map {
+		id: $.id,
+		firstName: $.first_name,
+		lastName: $.last_name,
+		region: $.region,
+		phone: $.phone
+	}
+} as :object {class: "com.deloitte.system.customer.cdm.Customers"}]]></dw:set-variable>
+        </dw:transform-message>
+        <choice doc:name="If Products">
+            <when expression="#[message.inboundProperties['http.query.params'].retrieveProducts == 'true']">
+                <foreach collection="#[flowVars.cdm.customers]" doc:name="For Each Customer...">
+                    <set-variable variableName="customerID" value="#[payload.id]" doc:name="Get Customer ID"/>
+                    <db:select config-ref="CustomerDB_Configuration" doc:name="Get Products for Customer">
+                        <db:parameterized-query><![CDATA[SELECT p.id AS product_id, p.name AS product_name
+  FROM product AS p INNER JOIN customer_product AS cp ON p.id = cp.product_id
+  WHERE cp.customer_id = #[flowVars.customerID]]]></db:parameterized-query>
+                    </db:select>
+                    <foreach collection="#[payload]" doc:name="For Each Product...">
+                        <set-variable variableName="product" value="#[new com.deloitte.system.customer.cdm.Product(payload.product_id, payload.product_name)]" doc:name="Create Product"/>
+                        <foreach collection="#[flowVars.cdm.customers]" doc:name="For Each Customer...">
+                            <choice doc:name="If Customer ID Matches">
+                                <when expression="#[payload.id == flowVars.customerID]">
+                                    <expression-component doc:name="Expression"><![CDATA[payload.products.add(flowVars.product);]]></expression-component>
+                                </when>
+                                <otherwise>
+                                    <logger level="INFO" doc:name="DO NOTHING"/>
+                                </otherwise>
+                            </choice>
+                        </foreach>
+                    </foreach>
+                </foreach>
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="DO NOTHING"/>
+            </otherwise>
+        </choice>
+        <set-payload value="#[flowVars.cdm]" doc:name="Put CDM Back in Payload"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Complete"/>
+
+    </flow>
+    <flow name="get:/customers/{ID}:api-config">
+        <logger message="${logging.flowStartMessage}" level="INFO" doc:name="Log Start"/>
+        <db:select config-ref="CustomerDB_Configuration" doc:name="Get Customer from Database">
+            <db:parameterized-query><![CDATA[select id, first_name, last_name, region, phone from customer
+where id = #[flowVars.ID]]]></db:parameterized-query>
+        </db:select>
+        <dw:transform-message doc:name="Pull Data into CDM">
+            <dw:set-variable variableName="cdm"><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	id: payload[0].id,
+	firstName: payload[0].first_name,
+	lastName: payload[0].last_name,
+	region: payload[0].region,
+	phone: payload[0].phone
+} as :object {class: "com.deloitte.system.customer.cdm.Customer"}]]></dw:set-variable>
+        </dw:transform-message>
+        <choice doc:name="If Products">
+            <when expression="#[message.inboundProperties['http.query.params'].retrieveProducts == 'true']">
+                <db:select config-ref="CustomerDB_Configuration" doc:name="Get Products for Customer">
+                    <db:parameterized-query><![CDATA[SELECT p.id AS product_id, p.name AS product_name
+  FROM product AS p INNER JOIN customer_product AS cp ON p.id = cp.product_id
+  WHERE cp.customer_id = #[flowVars.cdm.id]]]></db:parameterized-query>
+                </db:select>
+                <foreach collection="#[payload]" doc:name="For Each Product...">
+                    <set-variable variableName="product" value="#[new com.deloitte.system.customer.cdm.Product(payload.product_id, payload.product_name)]" doc:name="Create Product"/>
+                    <expression-component doc:name="Expression"><![CDATA[flowVars.cdm.products.add(flowVars.product);]]></expression-component>
+                </foreach>
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="DO NOTHING"/>
+            </otherwise>
+        </choice>
+        <set-payload value="#[flowVars.cdm]" doc:name="Put CDM Back in Payload"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Complete"/>
+
+    </flow>
+    <apikit:mapping-exception-strategy name="api-apiKitGlobalExceptionMapping">
+        <apikit:mapping statusCode="404">
+            <apikit:exception value="org.mule.module.apikit.exception.NotFoundException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+
+        </apikit:mapping>
+        <apikit:mapping statusCode="405">
+            <apikit:exception value="org.mule.module.apikit.exception.MethodNotAllowedException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+
+        </apikit:mapping>
+        <apikit:mapping statusCode="415">
+            <apikit:exception value="org.mule.module.apikit.exception.UnsupportedMediaTypeException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+
+        </apikit:mapping>
+        <apikit:mapping statusCode="406">
+            <apikit:exception value="org.mule.module.apikit.exception.NotAcceptableException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+
+        </apikit:mapping>
+        <apikit:mapping statusCode="400">
+            <apikit:exception value="org.mule.module.apikit.exception.BadRequestException" />
+            <flow-ref name="set-error-values" doc:name="set-error-values"/>
+
+        </apikit:mapping>
+        <apikit:mapping statusCode="500">
+        	<apikit:exception value="java.sql.SQLException" />
+        	<flow-ref name="set-error-values" doc:name="set-error-values"/>
+        </apikit:mapping>
+    </apikit:mapping-exception-strategy>
+    <sub-flow name="set-error-values">
+        <set-property propertyName="Content-Type" value="application/json" doc:name="Set Content-Type"/>
+        <set-variable doc:name="Set Error Description" value="#[CustomExceptionHelper.escapeStringForJSON(exception.getMessage())]" variableName="errorDescription"/>
+        <set-variable variableName="errorCode" value="#[CustomExceptionHelper.getErrorCode(exception.cause.class)]" doc:name="Set Error Code"/>
+        <set-payload value="{
+	&quot;errorCode&quot;: #[flowVars.errorCode],
+	&quot;message&quot;: &quot;#[flowVars.errorDescription]&quot;
+}" doc:name="Set Payload"/>
+        <logger message="#[payload]" level="ERROR" doc:name="Log Error"/>
+    </sub-flow>
+</mule>

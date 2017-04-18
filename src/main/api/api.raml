@@ -1,0 +1,114 @@
+#%RAML 1.0
+title: Customer API
+version: 1.0
+baseUri: http://localhost:8083/customer-api
+
+documentation:
+  - title: Customer API
+    content: This API is for working with customers. The API is read-only; no Customer creation functionality is currently supported.
+
+types:
+  Customers:
+    description: This type is merely used to contain a collection of `Customer` objects
+    type: object
+    properties: 
+      customers:
+        type: array
+        items: Customer
+        
+  Customer:
+    description: Properties for a single **Customer**
+    type: object
+    properties:
+      ID:
+        description: The Customer's unique ID
+        type: integer
+        required: true
+      firstName:
+        type: string
+        required: true
+      lastName:
+        type: string
+        required: true
+      region:
+        description: The customer's geographic region
+        type: string
+        required: true
+      phone:
+        description: The customer's phone number, in 9999999999 format. (Not validated.)
+        type: string
+        required: false
+      products:
+        description: An array of Products that this customer has purchased in the past
+        type: array
+        items: Product
+        required: false
+  
+  Product:
+    description: A short description of a product; copied from the **Product** microservice (but not retrieved real-time).
+    type: object
+    properties: 
+      id:
+        description: The unique ID of the product, from the **Product** microservice
+        type: integer
+        required: true
+      name:
+        description: The name (not the description) of the product.
+        type: string
+        required: true
+
+
+/customers:
+  description: The `Customer` resources are read-only
+  get:
+    description: Returns a list of customers, with or without parameterization
+    queryParameters: 
+      region:
+        description: Used for filtering the list of customers based on region. Case-sensitive.
+        type: string
+        required: false
+      retrieveProducts:
+        description: Indicates whether `Product` details should be returned along with the rest of the Customer information.
+        type: boolean
+        default: false
+        required: false
+    responses: 
+      200:
+        description: Returned when one or more customers are found
+        body: 
+          application/json:
+            type: Customers
+            example: |
+              { "customers": [{"ID": 1,"firstName": "David","lastName": "Hunter","region": "GTA", "phone": "416-555-1212"},{"ID": 2,"firstName": "Barry","lastName": "Carr","region": "Atlantic","phone": "902-555-1212"},{"ID": 3,"firstName": "Behta","lastName": "Ostowan","region": "Quebec","phone": "514-555-1212"}]}
+      404:
+        description: Returned when no customers are found matching the given parameters
+        body: 
+          application/json:
+            type: !include Error.raml
+            example: |
+              { "errorCode": -1, "message": "No matching Customers." }
+  /{ID}:
+    description: Returns a single, read-only `Customer` resource
+    get:
+      description: Returns a single Customer, based on ID
+      queryParameters: 
+        retrieveProducts:
+          description: Indicates whether `Product` details should be returned along with the rest of the Custoemr information.
+          type: boolean
+          default: false
+          required: false
+      responses: 
+        200:
+          description: Returned when a customer is found with the given ID (regardless whether products are found or not).
+          body: 
+            application/json:
+              type: Customer
+              example: |
+                {"ID": 1,"firstName": "David","lastName": "Hunter","region": "GTA","phone": "416-555-1212"}
+        404:
+          description: Returned if no customer can be found with the given ID.
+          body: 
+            application/json:
+              type: !include Error.raml
+              example: |
+                { "errorCode": -1, "message": "Customer not found." }
