@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mule xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:context="http://www.springframework.org/schema/context" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+<mule xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:context="http://www.springframework.org/schema/context" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
 http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
 http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
 http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
@@ -7,7 +7,8 @@ http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/cu
 http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
 http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
 http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
-http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd">
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd">
     <http:listener-config name="api-httpListenerConfig" host="0.0.0.0" port="${http.port}" doc:name="HTTP Listener Configuration"/>
     
     <apikit:config name="api-config" raml="api.raml" consoleEnabled="false" doc:name="Router"/>
@@ -39,7 +40,7 @@ http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee
 where region like #[flowVars.region]]]></db:parameterized-query>
         </db:select>
         <dw:transform-message doc:name="Pull Data into CDM">
-            <dw:set-variable variableName="cdm"><![CDATA[%dw 1.0
+            <dw:set-session-variable variableName="cdm"><![CDATA[%dw 1.0
 %output application/java
 ---
 {
@@ -50,40 +51,52 @@ where region like #[flowVars.region]]]></db:parameterized-query>
 		region: $.region,
 		phone: $.phone
 	}
-} as :object {class: "com.deloitte.system.customer.cdm.Customers"}]]></dw:set-variable>
+} as :object {class: "com.deloitte.system.customer.cdm.Customers"}]]></dw:set-session-variable>
         </dw:transform-message>
         <choice doc:name="If Products">
             <when expression="#[message.inboundProperties['http.query.params'].retrieveProducts == 'true']">
-                <foreach collection="#[flowVars.cdm.customers]" doc:name="For Each Customer...">
-                    <set-variable variableName="customerID" value="#[payload.id]" doc:name="Get Customer ID"/>
-                    <db:select config-ref="CustomerDB_Configuration" doc:name="Get Products for Customer">
-                        <db:parameterized-query><![CDATA[SELECT p.id AS product_id, p.name AS product_name
-  FROM product AS p INNER JOIN customer_product AS cp ON p.id = cp.product_id
-  WHERE cp.customer_id = #[flowVars.customerID]]]></db:parameterized-query>
-                    </db:select>
-                    <foreach collection="#[payload]" doc:name="For Each Product...">
-                        <set-variable variableName="product" value="#[new com.deloitte.system.customer.cdm.Product(payload.product_id, payload.product_name)]" doc:name="Create Product"/>
-                        <foreach collection="#[flowVars.cdm.customers]" doc:name="For Each Customer...">
-                            <choice doc:name="If Customer ID Matches">
-                                <when expression="#[payload.id == flowVars.customerID]">
-                                    <expression-component doc:name="Expression"><![CDATA[payload.products.add(flowVars.product);]]></expression-component>
-                                </when>
-                                <otherwise>
-                                    <logger level="INFO" doc:name="DO NOTHING"/>
-                                </otherwise>
-                            </choice>
-                        </foreach>
-                    </foreach>
-                </foreach>
+                <request-reply doc:name="Request-Reply">
+                    <vm:outbound-endpoint exchange-pattern="one-way" path="splitcustomers" doc:name="VM"/>
+                    <vm:inbound-endpoint exchange-pattern="one-way" path="returncustomera" doc:name="VM"/>
+                </request-reply>
             </when>
             <otherwise>
                 <logger level="INFO" doc:name="DO NOTHING"/>
             </otherwise>
         </choice>
-        <set-payload value="#[flowVars.cdm]" doc:name="Put CDM Back in Payload"/>
+        <set-payload value="#[sessionVars.cdm]" doc:name="Put CDM Back in Payload"/>
         <json:object-to-json-transformer doc:name="Object to JSON"/>
         <logger message="${logging.flowEndMessage}" level="INFO" doc:name="Log Complete"/>
 
+    </flow>
+    <flow name="splitCustomersFlow">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="splitcustomers" doc:name="VM"/>
+        <collection-splitter doc:name="Collection Splitter"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="processcustomer" doc:name="VM"/>
+    </flow>
+    <flow name="getProductsForCustomerFlow">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="processcustomer" doc:name="VM"/>
+        <set-variable variableName="customerID" value="#[payload.id]" doc:name="Get Customer ID"/>
+        <db:select config-ref="CustomerDB_Configuration" doc:name="Get Products for Customer">
+            <db:parameterized-query><![CDATA[SELECT p.id AS product_id, p.name AS product_name
+  FROM product AS p INNER JOIN customer_product AS cp ON p.id = cp.product_id
+  WHERE cp.customer_id = #[flowVars.customerID]]]></db:parameterized-query>
+        </db:select>
+        <foreach collection="#[payload]" doc:name="For Each Product...">
+            <set-variable variableName="product" value="#[new com.deloitte.system.customer.cdm.Product(payload.product_id, payload.product_name)]" doc:name="Create Product"/>
+            <foreach collection="#[sessionVars.cdm.customers]" doc:name="For Each Customer...">
+                <choice doc:name="If Customer ID Matches">
+                    <when expression="#[payload.id == flowVars.customerID]">
+                        <expression-component doc:name="Expression"><![CDATA[payload.products.add(flowVars.product);]]></expression-component>
+                    </when>
+                    <otherwise>
+                        <logger level="INFO" doc:name="DO NOTHING"/>
+                    </otherwise>
+                </choice>
+            </foreach>
+        </foreach>
+        <collection-aggregator failOnTimeout="true" doc:name="Collection Aggregator"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="returncustomera" doc:name="VM"/>
     </flow>
     <flow name="get:/customers/{ID}:api-config">
         <logger message="${logging.flowStartMessage}" level="INFO" doc:name="Log Start"/>
